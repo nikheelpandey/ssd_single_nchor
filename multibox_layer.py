@@ -1,13 +1,8 @@
-from __future__ import print_function
-
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
 
-from torch.autograd import Variable
 
 
 class MultiBoxLayer(nn.Module):
@@ -23,7 +18,7 @@ class MultiBoxLayer(nn.Module):
         self.conf_layers = nn.ModuleList()
         for i in range(len(self.in_planes)):
         	self.loc_layers.append(nn.Conv2d(self.in_planes[i], self.num_anchors[i]*4, kernel_size=3, padding=1))
-        	self.conf_layers.append(nn.Conv2d(self.in_planes[i], self.num_anchors[i]*21, kernel_size=3, padding=1))
+        	self.conf_layers.append(nn.Conv2d(self.in_planes[i], self.num_anchors[i]*11, kernel_size=3, padding=1))
 
     def forward(self, xs):
         '''

@@ -1,112 +1,143 @@
-'''Some helper functions for PyTorch, including:
-    - get_mean_and_std: calculate the mean and std value of dataset.
-    - msr_init: net parameter initialization.
-    - progress_bar: progress bar mimic xlua.progress.
-'''
-import os
-import sys
-import time
-import math
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Apr 17 01:17:07 2020
+
+@author: ansh
+"""
 
 import torch
-import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+from torchvision.transforms.functional import to_pil_image
+
+def adjust_learning_rate(optimizer, scale):
+    """
+    Scale learning rate by a specified factor.
+
+    :param optimizer: optimizer whose learning rate must be shrunk.
+    :param scale: factor to multiply learning rate with.
+    """
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = param_group['lr'] * scale
+    print("DECAYING learning rate.\n The new LR is %f\n" % (optimizer.param_groups[1]['lr'],))
 
 
-def get_mean_and_std(dataset, max_load=10000):
-    '''Compute the mean and std value of dataset.'''
-    # dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=2)
-    mean = torch.zeros(3)
-    std = torch.zeros(3)
-    print('==> Computing mean and std..')
-    N = min(max_load, len(dataset))
-    for i in range(N):
-        print(i)
-        im,_,_ = dataset.load(1)
-        for j in range(3):
-            mean[j] += im[:,j,:,:].mean()
-            std[j] += im[:,j,:,:].std()
-    mean.div_(N)
-    std.div_(N)
-    return mean, std
+def accuracy(scores, targets, k):
+    """
+    Computes top-k accuracy, from predicted and true labels.
 
-def mask_select(input, mask, dim):
-    '''Select tensor rows/cols using a mask tensor.
+    :param scores: scores from the model
+    :param targets: true labels
+    :param k: k in top-k accuracy
+    :return: top-k accuracy
+    """
+    batch_size = targets.size(0)
+    _, ind = scores.topk(k, 1, True, True)
+    correct = ind.eq(targets.view(-1, 1).expand_as(ind))
+    correct_total = correct.view(-1).float().sum()  # 0D tensor
+    return correct_total.item() * (100.0 / batch_size)
 
-    Args:
-      input: (tensor) input tensor, sized [N,M].
-      mask: (tensor) mask tensor, sized [N,] or [M,].
-      dim: (tensor) mask dim.
 
-    Returns:
-      (tensor) selected rows/cols.
+def save_checkpoint(epoch, model, optimizer, config, path):
+    """
+    Save model checkpoint.
 
-    Example:
-    >>> a = torch.randn(4,2)
-    >>> a
-    -0.3462 -0.6930
-     0.4560 -0.7459
-    -0.1289 -0.9955
-     1.7454  1.9787
-    [torch.FloatTensor of size 4x2]
-    >>> i = a[:,0] > 0
-    >>> i
-    0
-    1
-    0
-    1
-    [torch.ByteTensor of size 4]
-    >>> masked_select(a, i, 0)
-    0.4560 -0.7459
-    1.7454  1.9787
-    [torch.FloatTensor of size 2x2]
+    :param epoch: epoch number
+    :param model: model
+    :param optimizer: optimizer
+    """
+    state = {'epoch': epoch,
+             'model': model,
+             'optimizer': optimizer,
+             'config': config}
+    torch.save(state, path)
+
+
+class AverageMeter(object):
+    """
+    Keeps track of most recent, average, sum, and count of a metric.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def clip_gradient(optimizer, grad_clip):
+    """
+    Clips gradients computed during backpropagation to avoid explosion of gradients.
+
+    :param optimizer: optimizer with the gradients to be clipped
+    :param grad_clip: clip value
+    """
+    for group in optimizer.param_groups:
+        for param in group['params']:
+            if param.grad is not None:
+                param.grad.data.clamp_(-grad_clip, grad_clip)
+
+
+def xywh_to_xyXY(boxes_xywh : torch.tensor) -> torch.tensor:
     '''
-    index = mask.nonzero().squeeze(1)
-    return input.index_select(dim, index)
+    Get bounding box coordinates in [ x_top_left, y_top_left, x_bottom_right, y_bottom_right] format.
 
-def msr_init(net):
-    '''Initialize layer parameters.'''
-    for layer in net:
-        if type(layer) == nn.Conv2d:
-            n = layer.kernel_size[0]*layer.kernel_size[1]*layer.out_channels
-            layer.weight.data.normal_(0, math.sqrt(2./n))
-            layer.bias.data.zero_()
-        elif type(layer) == nn.BatchNorm2d:
-            layer.weight.data.fill_(1)
-            layer.bias.data.zero_()
-        elif type(layer) == nn.Linear:
-            layer.bias.data.zero_()
+    Parameters
+    ----------
+    boxes : Bounding Box, a tensor in [ x_top_left, y_top_left, bb_width, bb_height] format.
+
+    '''
+    boxes_xyXY = boxes_xywh.clone()
+    boxes_xyXY[:,2] = boxes_xyXY[:,2] + boxes_xyXY[:,0]
+    boxes_xyXY[:,3] = boxes_xyXY[:,3] + boxes_xyXY[:,1]
+    return boxes_xyXY
 
 
-# _, term_width = os.popen('stty size', 'r').read().split()
+def showBB_xyXY(image, boxes, scale = 300):
+    if (type(image) == torch.Tensor):
+        image = to_pil_image(image)
+    plt.imshow(image)
+    for bb in boxes:
+        x,y,X,Y = map(int, bb*scale)
+        plt.plot([x, X, X, x, x], [y, y, Y, Y, y], c='b', linewidth=1)
+    plt.show()
 
-def format_time(seconds):
-    days = int(seconds / 3600/24)
-    seconds = seconds - days*3600*24
-    hours = int(seconds / 3600)
-    seconds = seconds - hours*3600
-    minutes = int(seconds / 60)
-    seconds = seconds - minutes*60
-    secondsf = int(seconds)
-    seconds = seconds - secondsf
-    millis = int(seconds*1000)
 
-    f = ''
-    i = 1
-    if days > 0:
-        f += str(days) + 'D'
-        i += 1
-    if hours > 0 and i <= 2:
-        f += str(hours) + 'h'
-        i += 1
-    if minutes > 0 and i <= 2:
-        f += str(minutes) + 'm'
-        i += 1
-    if secondsf > 0 and i <= 2:
-        f += str(secondsf) + 's'
-        i += 1
-    if millis > 0 and i <= 2:
-        f += str(millis) + 'ms'
-        i += 1
-    if f == '':
-        f = '0ms'
-    return f
+def get_params_to_learn(model):
+    params_to_learn = []
+    for param in model.named_parameters():
+        if param.requires_grad:
+            params_to_learn.append(param)
+    return params_to_learn
+
+
+def get_mean_AR(df):
+    samples = df.BB_xywh.values
+    AR = list()
+    for boxes in samples:
+        for box in boxes:
+            AR.append(box[2] / box[3])
+    AR = np.array(AR)
+    return AR.mean(), AR.std()      
+
+
+def get_model_params(model):
+    biases = list()
+    not_biases = list()
+    for param_name, param in model.named_parameters():
+        if param.requires_grad:
+            if param_name.endswith('.bias'):
+                biases.append(param)
+            else:
+                not_biases.append(param)
+    return {'biases' : biases, 'not_biases' : not_biases}
